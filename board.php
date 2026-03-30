@@ -1,7 +1,9 @@
 <?php
 // board.php
 require_once 'config.php';
+configure_secure_session();
 session_start();
+send_security_headers();
 
 if (!isset($_SESSION["user_id"])) {
     header("Location: index.php");
@@ -13,6 +15,9 @@ $error_message = "";
 
 // スレッド削除処理
 if (isset($_POST["delete_thread"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $thread_id = (int)$_POST["thread_id"];
 
     // 作成者を確認
@@ -21,10 +26,15 @@ if (isset($_POST["delete_thread"])) {
     $stmt->execute();
     $row = $stmt->fetch();
 
-    if ($row && $row['user_id'] == $_SESSION["user_id"]) {
-        // 画像削除 (uploads/ にある場合のみ)
-        if (!empty($row['image_path']) && file_exists(__DIR__ . "/" . $row['image_path'])) {
-            unlink(__DIR__ . "/" . $row['image_path']);
+    if ($row && (int)$row['user_id'] === (int)$_SESSION["user_id"]) {
+        // 画像削除（uploads/ 内にあることを検証してからのみ実行）
+        if (!empty($row['image_path'])) {
+            $upload_dir = realpath(__DIR__ . "/uploads");
+            $abs_path   = realpath(__DIR__ . "/" . $row['image_path']);
+            if ($abs_path !== false && $upload_dir !== false
+                && strpos($abs_path, $upload_dir . DIRECTORY_SEPARATOR) === 0) {
+                unlink($abs_path);
+            }
         }
         // 親スレッドおよび紐付く返信を削除
         $sql = $pdo->prepare("DELETE FROM posts WHERE id = :id OR parent_id = :id");
@@ -37,36 +47,49 @@ if (isset($_POST["delete_thread"])) {
    
 // 新しいスレッド作成
 if (isset($_POST["new_thread"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $title = trim($_POST["title"]);
     $content = trim($_POST["content"]);
     $image_path = null;
 
-    // MIMEタイプの簡易チェック
-    $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    // MIMEタイプを正として拡張子を決定（ユーザー指定の拡張子は使用しない）
+    $mime_to_ext = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/gif'  => 'gif',
+        'image/webp' => 'webp',
+    ];
+    $max_file_size = 5 * 1024 * 1024; // 5MB
 
     if (!empty($_FILES["image"]["name"]) && $_FILES["image"]["error"] == UPLOAD_ERR_OK) {
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $mime_type = finfo_file($finfo, $_FILES["image"]["tmp_name"]);
-        finfo_close($finfo);
-
-        if (in_array($mime_type, $allowed_types)) {
-            $upload_dir = __DIR__ . "/uploads/";
-            if (!file_exists($upload_dir)) {
-                mkdir($upload_dir, 0777, true);
-            }
-
-            // 安全なファイル名を生成
-            $extension = pathinfo($_FILES["image"]["name"], PATHINFO_EXTENSION);
-            $filename = uniqid(time() . "_") . "." . $extension;
-            $target_path = $upload_dir . $filename;
-
-            if (move_uploaded_file($_FILES["image"]["tmp_name"], $target_path)) {
-                $image_path = "uploads/" . $filename;
-            } else {
-                $error_message = "画像のアップロードに失敗しました。";
-            }
+        if ($_FILES["image"]["size"] > $max_file_size) {
+            $error_message = "ファイルサイズは5MB以下にしてください。";
         } else {
-            $error_message = "許可されていないファイル形式です（JPG, PNG, GIF, WEBPのみ対応）。";
+            $finfo     = finfo_open(FILEINFO_MIME_TYPE);
+            $mime_type = finfo_file($finfo, $_FILES["image"]["tmp_name"]);
+            finfo_close($finfo);
+
+            if (isset($mime_to_ext[$mime_type])) {
+                $upload_dir = __DIR__ . "/uploads/";
+                if (!file_exists($upload_dir)) {
+                    mkdir($upload_dir, 0755, true);
+                }
+
+                // MIME から決定した拡張子のみを使用し、推測不能なファイル名を生成
+                $extension   = $mime_to_ext[$mime_type];
+                $filename    = bin2hex(random_bytes(16)) . "." . $extension;
+                $target_path = $upload_dir . $filename;
+
+                if (move_uploaded_file($_FILES["image"]["tmp_name"], $target_path)) {
+                    $image_path = "uploads/" . $filename;
+                } else {
+                    $error_message = "画像のアップロードに失敗しました。";
+                }
+            } else {
+                $error_message = "許可されていないファイル形式です（JPG, PNG, GIF, WEBPのみ対応）。";
+            }
         }
     }
 
@@ -246,7 +269,7 @@ $threads = $stmt->fetchAll();
     <h1>みんなの本棚</h1>
     <div style="font-size: 0.9rem; font-weight: 600;">
       ようこそ <b><?= h($_SESSION["username"]) ?></b> さん
-      <a href="index.php" style="margin-left: 1rem; color: var(--text-muted); text-decoration: none;">ログアウト</a>
+      <a href="logout.php" style="margin-left: 1rem; color: var(--text-muted); text-decoration: none;">ログアウト</a>
     </div>
   </header>
 
@@ -257,6 +280,7 @@ $threads = $stmt->fetchAll();
         <div class="alert-error"><?= h($error_message) ?></div>
       <?php endif; ?>
       <form method="post" action="" enctype="multipart/form-data">
+          <?= csrf_input() ?>
           <input type="text" name="title" placeholder="本の題名（スレッドタイトル）" required>
           <textarea name="content" rows="3" placeholder="感想、質問、コメントを入力してください"></textarea>
           
@@ -295,6 +319,7 @@ $threads = $stmt->fetchAll();
               <!-- 削除ボタン（本人のみ） -->
               <?php if ($thread['user_id'] == $_SESSION["user_id"]): ?>
               <form method="post" action="" style="margin: 0;">
+                  <?= csrf_input() ?>
                   <input type="hidden" name="thread_id" value="<?= $thread['id'] ?>">
                   <button type="submit" name="delete_thread" class="btn-danger" onclick="return confirm('本当に削除しますか？紐づく返信もすべて消去されます。');">削除</button>
               </form>

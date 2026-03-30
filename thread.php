@@ -1,7 +1,9 @@
 <?php
 // thread.php
 require_once 'config.php';
+configure_secure_session();
 session_start();
+send_security_headers();
 
 if (!isset($_SESSION["user_id"])) {
     header("Location: index.php");
@@ -30,6 +32,9 @@ if (!$thread) {
 
 // 返信処理
 if (isset($_POST["reply"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $content = trim($_POST["content"]);
     if ($content !== "") {
         $sql = $pdo->prepare("INSERT INTO posts (user_id, parent_id, content) VALUES (:user_id, :parent_id, :content)");
@@ -269,6 +274,7 @@ $replies = $stmt->fetchAll();
     <div class="reply-form-card">
       <h3 style="margin-top: 0;">返信を投稿する</h3>
       <form method="post">
+        <?= csrf_input() ?>
         <textarea name="content" rows="4" placeholder="スレッドへの返信や感想を入力してください" required></textarea>
         <button type="submit" name="reply" class="btn">返信する</button>
       </form>

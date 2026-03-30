@@ -1,7 +1,9 @@
 <?php
 // index.php
 require_once 'config.php';
+configure_secure_session();
 session_start();
+send_security_headers();
 
 $pdo = get_db_connection();
 $error_message = "";
@@ -9,6 +11,9 @@ $success_message = "";
 
 // 新規登録処理
 if (isset($_POST["signup"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $name_signup = trim($_POST["name_signup"]);
     $pw_signup = $_POST["pw_signup"];
     
@@ -43,6 +48,9 @@ if (isset($_POST["signup"])) {
 
 // ユーザーログイン処理
 if (isset($_POST["login"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $name_login = trim($_POST["name_login"]);
     $pw_login = $_POST["pw_login"];
     
@@ -70,10 +78,14 @@ if (isset($_POST["login"])) {
 
 // 管理者ログイン処理
 if (isset($_POST["admin_login"])) {
+    if (!verify_csrf_token()) {
+        die("不正なリクエストです。");
+    }
     $admin_id = $_POST["id"];
     $admin_pw = $_POST["pw_admin"];
 
-    if ($admin_id === ADMIN_ID && $admin_pw === ADMIN_PASS) {
+    // hash_equals でタイミング攻撃を防止
+    if (hash_equals(ADMIN_ID, $admin_id) && hash_equals(ADMIN_PASS, $admin_pw)) {
         $_SESSION["admin"] = true;
         session_regenerate_id(true);
         header("Location: admin.php"); // ※ 現状admin.phpは存在しないが遷移先として保留
@@ -307,6 +319,7 @@ $member_count = count($users);
       <div class="glass-card" style="padding: 1.5rem;">
         <h2 style="font-size: 1rem; border: none; margin-bottom: 1rem; color: var(--text-muted);">管理者ログイン</h2>
         <form action="" method="post">
+          <?= csrf_input() ?>
           <div class="form-group">
             <input type="text" name="id" placeholder="管理者ID">
           </div>
@@ -323,6 +336,7 @@ $member_count = count($users);
       <div class="glass-card">
         <h2>👋 いつものユーザー</h2>
         <form action="" method="post">
+          <?= csrf_input() ?>
           <div class="form-group">
             <label>ユーザー名</label>
             <input type="text" name="name_login" placeholder="例: Yamada Tarou" required>
@@ -338,6 +352,7 @@ $member_count = count($users);
       <div class="glass-card">
         <h2>✨ 新しくはじめる</h2>
         <form action="" method="post">
+          <?= csrf_input() ?>
           <div class="form-group">
             <label>新しく登録するユーザー名</label>
             <input type="text" name="name_signup" placeholder="例: Book Lover" required>
